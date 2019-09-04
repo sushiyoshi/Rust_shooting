@@ -1,17 +1,25 @@
 extern crate piston;
-extern crate graphics;
-extern crate glutin_window;
 extern crate opengl_graphics;
+extern crate graphics;
 
-use piston_window::*;
+#[cfg(feature = "include_glutin")]
+extern crate glutin_window;
+
+use opengl_graphics::{ GlGraphics, OpenGL };
+use piston::window::{ WindowSettings };
+use piston::input::*;
+use piston::event_loop::*;
+#[cfg(feature = "include_glutin")]
+use glutin_window::GlutinWindow as AppWindow;
+
 use std::f64;
 use std::clone::Clone;
-use opengl_graphics::{ GlGraphics, OpenGL };
-use piston::input::RenderArgs;
-use glutin_window::GlutinWindow as Window;
 
 pub const WIDTH: f64 = 640.0;
 pub const HEIGHT: f64 = 480.0;
+pub const PLAYER_COLOR: [f32;4] = [0.0,1.0,0.5,1.0];
+pub const PLAYER_SIZE: f64 = 7.0;
+pub const PLAYER_SPEED: f64 = 2.0;
 #[derive(Clone)]
 struct Bullet {
     x:f64,
@@ -28,13 +36,28 @@ struct Bullet {
 struct App {
     bullet:Vec<Bullet>,
     gl: GlGraphics,
-    window:Window,
+    window:AppWindow,
 }
 //弾を追加するときのオプション
 struct Boption {
   rota:f64,
   count:i32,
   st_dir:f64,
+}
+
+struct Player {
+  x:f64,
+  y:f64,
+  speed:f64,
+  up:bool,
+  down:bool,
+  left:bool,
+  right:bool,
+  color:[f32; 4],
+  size:f64,
+  spx:f64,
+  spy:f64,
+  shift:f64,
 }
 //ゲームオブジェクトのトレイト
 trait Chara {
@@ -51,35 +74,32 @@ impl App {
       bullet:Vec::with_capacity(100),
     }
   }
-  fn new_window(opengl:OpenGL) -> Window{
-    WindowSettings::new(
-                "shooting",
-                [WIDTH as u32, HEIGHT as u32]
-            )
-            .opengl(opengl)
-            .exit_on_esc(true)
-            .build()
-            .unwrap()  
+  fn new_window(opengl:OpenGL) -> AppWindow{
+    WindowSettings::new("shooting",[WIDTH as u32, HEIGHT as u32])
+    .exit_on_esc(true).graphics_api(opengl).build().unwrap()
   }
   fn all(&mut self) {
+    //let mut events = Events::new(EventSettings::new());
     let mut events = Events::new(EventSettings::new());
+    let mut player = Player::new();
     let mut count = 0.0;
     let mut count_2 =1.0;
-    while let Some(e) = events.next(&mut self.window) {
-      count += 1.0;
-      if count % 20.0 == 0.0 {
+    while let Some(e) = events.next(&mut self.window) {   
+      
+      if count % 40.0 == 0.0 {
         count_2 *= -1.0;
         add(
-        vec![Bullet{x:300.0,y:200.0,size:5.0,dir:count*2.0,speed:0.2,accele:0.1,dir_accele:0.5*count_2,color:[1.0,0.0,0.0,1.0]},
-        Bullet{x:300.0,y:200.0,size:5.0,dir:count*4.0,speed:0.0,accele:0.2,dir_accele:-1.0*count_2,color:[1.0,0.3,0.8,1.0]}],
+        Bullet{x:300.0,y:200.0,size:5.0,dir:count*2.0,speed:0.03,accele:0.1,dir_accele:0.5*count_2,color:[1.0,0.0,0.0,1.0]},
         //Default::default(),
         Boption{rota:10.0,count:36,st_dir:count},
         &mut self.bullet);
       }
+      count += 1.0;
       if let Some(c) = e.render_args() {
         clear_all(&c);
       }
       //for el in &mut self.bullet {
+      
       let l = self.bullet.len();
       //Rustらしい書き方ではないと思うので要変更
       for i in 1..l+1 {
@@ -91,14 +111,23 @@ impl App {
         }
         if let Some(_) = e.update_args() {
           el.update();
-        }
-        
-        if is_in_screen(&el) {
-          //println!("delete");
+        }        
+        if !is_in_screen(&el) {
           self.bullet.swap_remove(index);
         }
       }
-      //println!("length:{}",self.bullet.len());
+      if let Some(r) = e.render_args() {
+        player.render(&r,&mut self.gl);
+      }
+      if let Some(_) = e.update_args() {
+        player.update();
+      }
+      if let Some(b) = e.press_args() {
+        player.press(&b);
+      }
+      if let Some(b) = e.release_args() {
+        player.release(&b);
+      }
     }
 
   }
@@ -107,12 +136,12 @@ impl Chara for Bullet {
   fn render(&mut self,args:&RenderArgs,gl:&mut GlGraphics) {
     use graphics::*;
     let cl:[f32; 4]  = self.color;
-    let (square,white) = (rectangle::square(0.0, 0.0,self.size),rectangle::square(1.7/10.0*self.size, 1.7/10.0*self.size, self.size/1.7));
+    let (square,white) = (rectangle::square(0.0, 0.0,self.size),rectangle::square(0.0,0.0,self.size));
     let (x, y) = (self.x,self.y);
     gl.draw(args.viewport(), |c, gl| {
         let transform = c.transform.trans(x, y);
         circle_arc(cl, 5.0,0.0,f64::consts::PI*1.9999,square,transform, gl);
-        circle_arc([1.0; 4], 4.0,0.0,f64::consts::PI*1.9999,white,transform, gl);
+        circle_arc([1.0; 4], 3.0,0.0,f64::consts::PI*1.9999,white,transform, gl);
     });
   }
   fn update(&mut self) {
@@ -142,6 +171,85 @@ impl Default for Bullet {
     color:[1.0; 4],}
   }
 }
+
+impl Player {
+  pub fn new() -> Player {
+    Player {
+      x:320.0,
+      y:400.0,
+      up:false,down:false,left:false,right:false,
+      color:PLAYER_COLOR,
+      size:PLAYER_SIZE,
+      speed:PLAYER_SPEED,
+      spx:0.0,
+      spy:0.0,
+      shift:2.0,
+    }
+  }
+
+  fn render(&mut self,args:&RenderArgs,gl:&mut GlGraphics) {
+    use graphics::*;
+    let cl:[f32; 4]  = self.color;
+    let (square,white) = (rectangle::square(0.0, 0.0,self.size),rectangle::square(0.0,0.0,self.size));
+    let (x, y) = (self.x,self.y);
+    gl.draw(args.viewport(), |c, gl| {
+        let transform = c.transform.trans(x, y);
+        circle_arc(cl, 5.0,0.0,f64::consts::PI*1.9999,square,transform, gl);
+        circle_arc([1.0; 4], 3.0,0.0,f64::consts::PI*1.9999,white,transform, gl);
+    }); 
+  }
+  fn update(&mut self) {
+    self.x += self.spx*self.shift*self.speed;
+    self.y += self.spy*self.shift*self.speed;
+  }
+  fn press(&mut self, args: &Button) {
+    if let &Button::Keyboard(key) = args {
+        match key {
+            Key::Up => {
+                self.spy = -1.0;
+            }
+            Key::Down => {
+                self.spy = 1.0;
+            }
+            Key::Left => {
+                self.spx = -1.0;
+            }
+            Key::Right => {
+                self.spx = 1.0;
+            }
+            Key::LShift => {
+              self.shift = 0.5;
+            }
+            _ => {}
+        }
+    }
+  }
+
+  fn release(&mut self, args: &Button) {
+    if let &Button::Keyboard(key) = args {
+        match key {
+           Key::Up => {
+                self.spy = 0.0;
+            }
+            Key::Down => {
+                self.spy = 0.0;
+            }
+            Key::Left => {
+                self.spx = 0.0;
+            }
+            Key::Right => {
+                self.spx = 0.0;
+            }
+            Key::LShift => {
+              self.shift = 1.0;
+            }
+            _ => {}
+        }
+    }
+  }
+}
+
+
 //画面全消し
 fn clear_all(args: &RenderArgs) {
   use graphics::*;
@@ -152,19 +260,17 @@ fn clear_all(args: &RenderArgs) {
 //画面内にあるかどうか
 fn is_in_screen(bullet:&Bullet) -> bool {
     bullet.y < HEIGHT + bullet.size
-    && bullet.y > 12.0-bullet.size
-    && bullet.x > WIDTH + bullet.size
-    && bullet.x > 12.0-bullet.size
+    && bullet.y > 0.0-bullet.size
+    && bullet.x < WIDTH + bullet.size
+    && bullet.x > 0.0-bullet.size
 }
 //弾を追加する
-fn add(obj:Vec<Bullet>,boption:Boption,bullet_data:&mut Vec<Bullet>) {
+fn add(obj:Bullet,boption:Boption,bullet_data:&mut Vec<Bullet>) {
   let mut d = boption.st_dir;
   for _ in 0..boption.count {
-    for e in &obj {
-      let mut cp = e.clone();
-      cp.dir = d;
-      bullet_data.push(cp);
-    }
+    let mut cp = obj.clone();
+    cp.dir = d;
+    bullet_data.push(cp);
     d+=boption.rota;
   }
 }
